@@ -15,6 +15,6 @@ class LambdaCalculator(object):
         return lam
 
 
-def get_lambda_calculator(milestones, warmup=True):
+def get_lambda_calculator(milestones, warmup):
     calculator = LambdaCalculator(milestones=milestones, warmup=warmup)
     return calculator.get_lambda

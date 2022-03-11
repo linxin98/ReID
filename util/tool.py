@@ -1,7 +1,9 @@
+import copy
 import random
 from re import template
 
 import numpy as np
+from sympy import N
 import torch
 from torch import nn
 
@@ -44,8 +46,7 @@ def get_templates(m, n, mode='normal'):
     return template1, template2
 
 
-def get_distance_matrix(features1, features2, mode='normal', cpu=False, shape=None):
-    m, n = features1.size(0), features2.size(0)
+def get_distance_matrix(features1, features2, mode='normal', to_numpy=False, shape=None, callback=None, val_norm=False):
     if mode == 'template':
         # Mainly for different distance functions.
         assert shape is not None, 'If use template mode, shape should not be None.'
@@ -58,22 +59,44 @@ def get_distance_matrix(features1, features2, mode='normal', cpu=False, shape=No
                 distance_matrix[x, y] = distance[index]
                 distance_matrix[y, x] = distance[index]
                 index += 1
-    elif mode == 'aggregate':
-        # Mainly for re-ranking.
-        features = torch.cat([features1, features2])
-        all_num = m + n
-        distance_matrix = torch.pow(features, 2).sum(dim=1, keepdim=True).expand(
-            all_num, all_num) + torch.pow(features, 2).sum(dim=1, keepdim=True).expand(all_num, all_num).t()
-        distance_matrix.addmm_(features, features.t(), beta=1, alpha=-2)
-        distance_matrix = distance_matrix.clamp(min=0).sqrt()
+    elif mode == 'val':
+        # Mainly for evaluate.
+        distance_matrix = []
+        batch = 0
+        for query_feature in features1:
+            batch += 1
+            if batch % 50 == 0:
+                print('Batch: {}'.format(batch))
+            distance = []
+            for gallery_feature in features2:
+                m, n = query_feature.shape[0], gallery_feature.shape[0]
+                val_template1, val_template2 = get_templates(m, n, mode='val')
+                new_query_feature = query_feature[val_template1, :]
+                new_gallery_feature = gallery_feature[val_template2, :]
+                if callback is not None:
+                    new_query_feature, new_gallery_feature = callback(
+                        new_query_feature, new_gallery_feature)
+                if val_norm:
+                    new_query_feature = torch.nn.functional.normalize(
+                        new_query_feature, p=2, dim=1)
+                    new_gallery_feature = torch.nn.functional.normalize(
+                        new_gallery_feature, p=2, dim=1)
+                matrix = torch.nn.functional.pairwise_distance(
+                    new_query_feature, new_gallery_feature)
+                matrix = matrix.reshape((m, n))
+                matrix = matrix.detach().cpu().numpy()
+                distance.append(matrix)
+            distance = np.concatenate(distance, axis=1)
+            distance_matrix.append(distance)
+        distance_matrix = np.concatenate(distance_matrix, axis=0)
     else:
-        # Mainly for evaluating.
+        m, n = features1.size(0), features2.size(0)
         distance_matrix = torch.pow(features1, 2).sum(dim=1, keepdim=True).expand(
             m, n) + torch.pow(features2, 2).sum(dim=1, keepdim=True).expand(n, m).t()
         distance_matrix.addmm_(features1, features2.t(), beta=1, alpha=-2)
         distance_matrix = distance_matrix.clamp(min=0).sqrt()
-    if cpu:
-        distance_matrix = distance_matrix.cpu().numpy()
+    if isinstance(distance_matrix, torch.Tensor) and to_numpy:
+        distance_matrix = distance_matrix.detach().cpu().numpy()
     return distance_matrix
 
 
